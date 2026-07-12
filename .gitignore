@@ -1,0 +1,33 @@
+# ESP-IDF build
+build/
+sdkconfig.old
+sdkconfig.defaults.*
+*.bin
+*.elf
+*.map
+*.hex
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Cache
+.cache/
+
+# Managed components checksums
+managed_components/**/CHECKSUMS.json
+
+
