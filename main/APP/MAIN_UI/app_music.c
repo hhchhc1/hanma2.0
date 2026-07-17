@@ -478,11 +478,7 @@ void app_music(void *pvParameters)
                             {
                                 xSemaphoreTake(music_activate_member, 20);
                                 g_audiodev.status = 0;
-                                
-                                while(1)
-                                {
-                                    vTaskDelay(pdMS_TO_TICKS(10));
-                                }
+                                break;  // 修复死锁: 退出信号 → 跳出循环正常结束
                             }
 
                             if ((g_audiodev.status & 0x0F) == 0x03)                 /* 暂停不刷新时间 */

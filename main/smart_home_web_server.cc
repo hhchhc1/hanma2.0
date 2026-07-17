@@ -17,6 +17,9 @@
 #include <cJSON.h>
 #include <sys/socket.h>
 
+#include "matter_device/matter_device.h"
+#include "matter_device/smart_home_matter_init.h"
+
 #ifdef CONFIG_IDF_TARGET_ESP32P4
 #include "camera/camera_display.h"
 #include <esp_jpeg_enc.h>
@@ -162,7 +165,7 @@ body.room2 .sensor-card{background:var(--card)}
 
 /* Camera */
 .camera-container{text-align:center;padding:8px 0}
-.camera-container img{max-width:100%;border-radius:12px;background:var(--card);display:none;border:1px solid var(--border)}
+.camera-container img{width:100%;max-width:100%;border-radius:12px;background:var(--card);display:none;border:1px solid var(--border)}
 .camera-placeholder{background:var(--card);border-radius:16px;padding:60px 20px;border:1px solid var(--border);color:var(--muted);font-size:14px}
 .camera-placeholder .cp-icon{font-size:48px;display:block;margin-bottom:12px}
 
@@ -393,8 +396,8 @@ function stopCamera(){
 function scheduleSnap(){
   if(!document.getElementById('pageCamera').classList.contains('active'))return;
   const img=document.getElementById('cameraFeed');
-  img.onload=function(){cameraTimer=setTimeout(scheduleSnap,150)};
-  img.onerror=function(){cameraTimer=setTimeout(scheduleSnap,500)};
+  img.onload=function(){cameraTimer=setTimeout(scheduleSnap,250)};
+  img.onerror=function(){cameraTimer=setTimeout(scheduleSnap,800)};
   img.src='/api/camera/snapshot?t='+Date.now()
 }
 
@@ -531,7 +534,12 @@ static esp_err_t fan_handler(httpd_req_t *req)
     {
         auto display = Board::GetInstance().GetDisplay();
         DisplayLockGuard lock(display);
-        smart_home_set_fan_state(cJSON_IsTrue(on));
+        if (!smart_home_set_fan_state(cJSON_IsTrue(on))) {
+            cJSON_Delete(root);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_sendstr(req, "{\"success\": false, \"reason\": \"auto_mode_active\"}");
+            return ESP_OK;
+        }
     }
 
     cJSON_Delete(root);
@@ -572,7 +580,12 @@ static esp_err_t light_handler(httpd_req_t *req)
     {
         auto display = Board::GetInstance().GetDisplay();
         DisplayLockGuard lock(display);
-        smart_home_set_light_state(cJSON_IsTrue(on));
+        if (!smart_home_set_light_state(cJSON_IsTrue(on))) {
+            cJSON_Delete(root);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_sendstr(req, "{\"success\": false, \"reason\": \"auto_mode_active\"}");
+            return ESP_OK;
+        }
     }
 
     cJSON_Delete(root);
@@ -619,6 +632,15 @@ static esp_err_t mode_handler(httpd_req_t *req)
     cJSON_Delete(root);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"success\": true}");
+    return ESP_OK;
+}
+
+static esp_err_t matter_descriptor_handler(httpd_req_t *req)
+{
+    std::string json = matter::DeviceManager::GetInstance().GenerateDescriptorJson();
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, json.c_str());
     return ESP_OK;
 }
 
@@ -693,6 +715,18 @@ static esp_err_t ai_messages_handler(httpd_req_t *req)
 }
 
 #ifdef CONFIG_IDF_TARGET_ESP32P4
+// ============================================================
+// Web camera snapshot — optimized for low-latency streaming
+// ============================================================
+#define WEBCAM_SCALE       2       // 800/2 = 400px (4x fewer pixels)
+#define WEBCAM_JPEG_QUAL   60      // good quality/size balance
+
+static uint8_t *s_webcam_rgb888 = NULL;
+static uint8_t *s_webcam_jpeg   = NULL;
+static int s_webcam_w = 0, s_webcam_h = 0;
+static size_t s_webcam_rgb888_size = 0;
+static size_t s_webcam_jpeg_size   = 0;
+
 static esp_err_t camera_snapshot_handler(httpd_req_t *req)
 {
     int w = 0, h = 0;
@@ -717,62 +751,73 @@ static esp_err_t camera_snapshot_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    int pixel_count = w * h;
-    uint8_t *rgb888 = (uint8_t*)heap_caps_malloc(pixel_count * 3, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!rgb888) {
+    // ---- Downscale: 800x800 → 266x266 by subsampling ----
+    int small_w = w / WEBCAM_SCALE;
+    int small_h = h / WEBCAM_SCALE;
+    int small_pixels = small_w * small_h;
+
+    // One-time buffer allocation (reused across requests)
+    if (!s_webcam_rgb888 || s_webcam_w != small_w || s_webcam_h != small_h) {
+        size_t new_rgb = (size_t)small_pixels * 3;
+        size_t new_jpg = (size_t)small_pixels * 2;
+        if (s_webcam_rgb888) heap_caps_free(s_webcam_rgb888);
+        if (s_webcam_jpeg)   heap_caps_free(s_webcam_jpeg);
+        s_webcam_rgb888 = (uint8_t*)heap_caps_malloc(new_rgb, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        s_webcam_jpeg   = (uint8_t*)heap_caps_malloc(new_jpg, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        s_webcam_rgb888_size = new_rgb;
+        s_webcam_jpeg_size   = new_jpg;
+        s_webcam_w = small_w;
+        s_webcam_h = small_h;
+    }
+
+    if (!s_webcam_rgb888 || !s_webcam_jpeg) {
         heap_caps_free(frame_buf);
         httpd_resp_set_status(req, "500 Internal Error");
         httpd_resp_sendstr(req, "Memory error");
         return ESP_OK;
     }
 
+    // Subsampled RGB565 → RGB888 conversion (9x fewer pixels)
     const uint16_t *src = (const uint16_t*)frame_buf;
-    uint8_t *dst = rgb888;
-    for (int i = 0; i < pixel_count; i++) {
-        uint16_t p = src[i];
-        dst[0] = ((p >> 11) & 0x1F) << 3;
-        dst[1] = ((p >> 5) & 0x3F) << 2;
-        dst[2] = (p & 0x1F) << 3;
-        dst += 3;
+    uint8_t *dst = s_webcam_rgb888;
+    int src_stride = w;  // pixels per row in source
+    for (int y = 0; y < h; y += WEBCAM_SCALE) {
+        int row_start = y * src_stride;
+        for (int x = 0; x < w; x += WEBCAM_SCALE) {
+            uint16_t p = src[row_start + x];
+            dst[0] = ((p >> 11) & 0x1F) << 3;
+            dst[1] = ((p >> 5)  & 0x3F) << 2;
+            dst[2] = (p & 0x1F) << 3;
+            dst += 3;
+        }
     }
     heap_caps_free(frame_buf);
 
-    int jpeg_buf_size = pixel_count * 2;
-    uint8_t *jpeg_buf = (uint8_t*)heap_caps_malloc(jpeg_buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!jpeg_buf) {
-        heap_caps_free(rgb888);
-        httpd_resp_set_status(req, "500 Internal Error");
-        httpd_resp_sendstr(req, "Memory error");
-        return ESP_OK;
-    }
-
+    // JPEG encode the small image (fast — only ~70K pixels)
     jpeg_enc_handle_t jpeg_enc = NULL;
     jpeg_enc_config_t enc_cfg = {
-        .width = w,
-        .height = h,
-        .src_type = JPEG_PIXEL_FORMAT_RGB888,
+        .width       = small_w,
+        .height      = small_h,
+        .src_type    = JPEG_PIXEL_FORMAT_RGB888,
         .subsampling = JPEG_SUBSAMPLE_420,
-        .quality = 50,
-        .rotate = JPEG_ROTATE_0D,
+        .quality     = WEBCAM_JPEG_QUAL,
+        .rotate      = JPEG_ROTATE_0D,
         .task_enable = false,
     };
 
     jpeg_error_t jerr = jpeg_enc_open(&enc_cfg, &jpeg_enc);
     if (jerr != JPEG_ERR_OK || !jpeg_enc) {
-        heap_caps_free(rgb888);
-        heap_caps_free(jpeg_buf);
         httpd_resp_set_status(req, "500 Internal Error");
         httpd_resp_sendstr(req, "JPEG init failed");
         return ESP_OK;
     }
 
     int out_size = 0;
-    jerr = jpeg_enc_process(jpeg_enc, rgb888, pixel_count * 3, jpeg_buf, jpeg_buf_size, &out_size);
+    jerr = jpeg_enc_process(jpeg_enc, s_webcam_rgb888, small_pixels * 3,
+                            s_webcam_jpeg, s_webcam_jpeg_size, &out_size);
     jpeg_enc_close(jpeg_enc);
-    heap_caps_free(rgb888);
 
     if (jerr != JPEG_ERR_OK || out_size <= 0) {
-        heap_caps_free(jpeg_buf);
         httpd_resp_set_status(req, "500 Internal Error");
         httpd_resp_sendstr(req, "JPEG encode failed");
         return ESP_OK;
@@ -780,9 +825,7 @@ static esp_err_t camera_snapshot_handler(httpd_req_t *req)
 
     httpd_resp_set_type(req, "image/jpeg");
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
-    httpd_resp_send(req, (const char*)jpeg_buf, out_size);
-
-    heap_caps_free(jpeg_buf);
+    httpd_resp_send(req, (const char*)s_webcam_jpeg, out_size);
     return ESP_OK;
 }
 #endif
@@ -877,9 +920,13 @@ void smart_home_web_server_configure_ap(void)
 
 static void start_web_server(void)
 {
+    // 初始化 Matter 设备树（一次性）
+    smarthome_matter_init();
+    ESP_LOGI(TAG, "Matter device tree initialized");
+
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
-    config.max_uri_handlers = 15;
+    config.max_uri_handlers = 16;
     config.stack_size = 16384;
     config.lru_purge_enable = true;
 
@@ -908,6 +955,9 @@ static void start_web_server(void)
 
     httpd_uri_t uri_mode = {.uri = "/api/mode", .method = HTTP_POST, .handler = mode_handler, .user_ctx = NULL};
     httpd_register_uri_handler(s_server, &uri_mode);
+
+    httpd_uri_t uri_matter = {.uri = "/api/matter/descriptor", .method = HTTP_GET, .handler = matter_descriptor_handler, .user_ctx = NULL};
+    httpd_register_uri_handler(s_server, &uri_matter);
 
     httpd_uri_t uri_ai_send = {.uri = "/api/ai/send", .method = HTTP_POST, .handler = ai_send_handler, .user_ctx = NULL};
     httpd_register_uri_handler(s_server, &uri_ai_send);

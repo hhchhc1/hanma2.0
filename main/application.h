@@ -1,10 +1,9 @@
 #ifndef _APPLICATION_H_
 #define _APPLICATION_H_
 
-#include <freertos/FreeRTOS.h>
-#include <freertos/event_groups.h>
-#include <freertos/task.h>
+#include "posix_compat/posix_compat.h"
 #include <esp_timer.h>
+#include <pthread.h>
 
 #include <string>
 #include <mutex>
@@ -77,7 +76,7 @@ private:
     std::mutex mutex_;
     std::deque<std::function<void()>> main_tasks_;
     std::unique_ptr<Protocol> protocol_;
-    EventGroupHandle_t event_group_ = nullptr;
+    posix::EventGroup *event_group_;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
     esp_timer_handle_t announce_timer_handle_ = nullptr;
     volatile DeviceState device_state_ = kDeviceStateUnknown;
@@ -92,7 +91,6 @@ private:
     int reminder_remaining_ = 0;
     int reminder_total_ = 0;
     std::vector<std::function<void(const std::string& role, const std::string& text)>> chat_message_callbacks_;
-    TaskHandle_t check_new_version_task_handle_ = nullptr;
     TaskHandle_t main_event_loop_task_handle_ = nullptr;
 
     void OnWakeWordDetected();
@@ -101,19 +99,5 @@ private:
     void SetListeningMode(ListeningMode mode);
 };
 
-
-class TaskPriorityReset {
-public:
-    TaskPriorityReset(BaseType_t priority) {
-        original_priority_ = uxTaskPriorityGet(NULL);
-        vTaskPrioritySet(NULL, priority);
-    }
-    ~TaskPriorityReset() {
-        vTaskPrioritySet(NULL, original_priority_);
-    }
-
-private:
-    BaseType_t original_priority_;
-};
 
 #endif // _APPLICATION_H_

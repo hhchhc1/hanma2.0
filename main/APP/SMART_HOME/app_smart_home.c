@@ -1,14 +1,18 @@
 #include "app_smart_home.h"
 #include "dht22.h"
 #include "bh1750.h"
+#include "display/extra_screens.h"
 #include <stdbool.h>
 #include "esp_log.h"
 
-static const char *TAG = "smart_home";
+/**
+ * 注意：此文件仅保留 LVGL UI 壳。
+ * 智能家居控制逻辑已统一迁移至 extra_screens.cc + Matter 设备框架。
+ * GPIO 控制、Web API、MCP 工具均由 extra_screens.cc 单点管理。
+ * 此处的状态变量和硬件操作已废弃，所有操作通过 extra_screens API 转发。
+ */
 
-#define FAN_INA_GPIO   GPIO_NUM_36
-#define FAN_INB_GPIO   GPIO_NUM_7
-#define BULB_GPIO      GPIO_NUM_12
+static const char *TAG = "smart_home";
 
 static lv_obj_t *temp_label = NULL;
 static lv_obj_t *humid_label = NULL;
@@ -21,34 +25,15 @@ static lv_obj_t *mode_btn = NULL;
 static lv_obj_t *mode_txt = NULL;
 static lv_timer_t *sensor_timer = NULL;
 
-static bool s_fan_on = false;
-static bool s_light_on = false;
-static bool s_auto_mode = false;
-static bool s_fan_gpio_init = false;
-static bool s_bulb_gpio_init = false;
+// 控制逻辑统一走 extra_screens.cc — 不再本地维护重复状态
+// 保留本地 UI 变量（仅用于界面刷新），GPIO 控制转发至 extra_screens.cc
 
-static void set_fan_hw(bool on)
-{
-    if (!s_fan_gpio_init) {
-        gpio_set_direction(FAN_INA_GPIO, GPIO_MODE_OUTPUT);
-        gpio_set_level(FAN_INA_GPIO, 0);
-        gpio_set_direction(FAN_INB_GPIO, GPIO_MODE_OUTPUT);
-        gpio_set_level(FAN_INB_GPIO, 0);
-        s_fan_gpio_init = true;
-    }
-    gpio_set_level(FAN_INA_GPIO, 0);
-    gpio_set_level(FAN_INB_GPIO, on ? 1 : 0);
-}
+// GPIO 控制改为空操作（由 extra_screens.cc 统一管理）
+// GPIO12 已永久归还摄像头使用
+static inline void set_fan_hw(bool on)   { smart_home_set_fan_state(on); }
+static inline void set_light_hw(bool on) { smart_home_set_light_state(on); }
 
-static void set_light_hw(bool on)
-{
-    if (!s_bulb_gpio_init) {
-        gpio_set_direction(BULB_GPIO, GPIO_MODE_OUTPUT);
-        gpio_set_level(BULB_GPIO, 0);
-        s_bulb_gpio_init = true;
-    }
-    gpio_set_level(BULB_GPIO, on ? 1 : 0);
-}
+// 保留本地变量用于 UI 渲染（与 extra_screens.cc 的 smart_home_state 同步）
 
 static void update_fan_ui(void)
 {

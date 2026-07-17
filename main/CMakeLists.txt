@@ -34,9 +34,12 @@ set(SOURCES "audio/audio_codec.cc"
             "esp_mqtt.cc"
             "esp_udp.cc"
             "esp_websocket.cc"
+            "mem_protect/mem_pool.cc"
+            "matter_device/matter_device_mgr.cc"
             )
 
 set(INCLUDE_DIRS "." "display" "audio" "protocols" "sensors" "input"
+    "posix_compat" "mem_protect" "matter_device"
     "${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__esp_cam_sensor/sensors/gc0308/include")
 
 # Board common files
@@ -168,6 +171,8 @@ idf_component_register(SRCS ${SOURCES}
                              esp_websocket_client mqtt lwip esp-tls
                     WHOLE_ARCHIVE
                     )
+
+# Kconfig workaround: see project root CMakeLists.txt for wifi_remote defines
 
 # BOARD_TYPE compile definition
 if(NOT BOARD_NAME)

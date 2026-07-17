@@ -1,6 +1,7 @@
 #include "audio_service.h"
 #include <esp_log.h>
 #include <cstring>
+#include <thread>
 
 #if CONFIG_USE_AUDIO_PROCESSOR
 #include "processors/afe_audio_processor.h"
@@ -20,12 +21,12 @@
 
 
 AudioService::AudioService() {
-    event_group_ = xEventGroupCreate();
+    event_group_ = posix::event_group_create();
 }
 
 AudioService::~AudioService() {
     if (event_group_ != nullptr) {
-        vEventGroupDelete(event_group_);
+        posix::event_group_delete(event_group_);
     }
 }
 
@@ -94,52 +95,32 @@ void AudioService::Initialize(AudioCodec* codec) {
 
 void AudioService::Start() {
     service_stopped_ = false;
-    xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING | AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING);
+    event_group_->clear_bits(AS_EVENT_AUDIO_TESTING_RUNNING | AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING);
 
     esp_timer_start_periodic(audio_power_timer_, 1000000);
 
 #if CONFIG_USE_AUDIO_PROCESSOR
     /* Start the audio input task */
-    xTaskCreate([](void* arg) {
-        AudioService* audio_service = (AudioService*)arg;
-        audio_service->AudioInputTask();
-        vTaskDelete(NULL);
-    }, "audio_input", 2048 * 3, this, 8, &audio_input_task_handle_);
+    posix::task_create({"audio_input", 2048 * 3, 8, -1}, [this]() { AudioInputTask(); });
 
     /* Start the audio output task */
-    xTaskCreate([](void* arg) {
-        AudioService* audio_service = (AudioService*)arg;
-        audio_service->AudioOutputTask();
-        vTaskDelete(NULL);
-    }, "audio_output", 2048 * 2, this, 4, &audio_output_task_handle_);
+    posix::task_create({"audio_output", 2048 * 2, 4, -1}, [this]() { AudioOutputTask(); });
 #else
     /* Start the audio input task */
-    xTaskCreate([](void* arg) {
-        AudioService* audio_service = (AudioService*)arg;
-        audio_service->AudioInputTask();
-        vTaskDelete(NULL);
-    }, "audio_input", 2048 * 2, this, 8, &audio_input_task_handle_);
+    posix::task_create({"audio_input", 2048 * 2, 8, -1}, [this]() { AudioInputTask(); });
 
     /* Start the audio output task */
-    xTaskCreate([](void* arg) {
-        AudioService* audio_service = (AudioService*)arg;
-        audio_service->AudioOutputTask();
-        vTaskDelete(NULL);
-    }, "audio_output", 2048, this, 4, &audio_output_task_handle_);
+    posix::task_create({"audio_output", 2048, 4, -1}, [this]() { AudioOutputTask(); });
 #endif
 
     /* Start the opus codec task */
-    xTaskCreate([](void* arg) {
-        AudioService* audio_service = (AudioService*)arg;
-        audio_service->OpusCodecTask();
-        vTaskDelete(NULL);
-    }, "opus_codec", 2048 * 13, this, 2, &opus_codec_task_handle_);
+    posix::task_create({"opus_codec", 2048 * 13, 2, -1}, [this]() { OpusCodecTask(); });
 }
 
 void AudioService::Stop() {
     esp_timer_stop(audio_power_timer_);
     service_stopped_ = true;
-    xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING |
+    event_group_->set_bits(AS_EVENT_AUDIO_TESTING_RUNNING |
         AS_EVENT_WAKE_WORD_RUNNING |
         AS_EVENT_AUDIO_PROCESSOR_RUNNING);
 
@@ -208,16 +189,16 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
 
 void AudioService::AudioInputTask() {
     while (true) {
-        EventBits_t bits = xEventGroupWaitBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING |
+        auto bits = event_group_->wait_bits(AS_EVENT_AUDIO_TESTING_RUNNING |
             AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING,
-            pdFALSE, pdFALSE, portMAX_DELAY);
+            false, false, 0);
 
         if (service_stopped_) {
             break;
         }
         if (audio_input_need_warmup_) {
             audio_input_need_warmup_ = false;
-            vTaskDelay(pdMS_TO_TICKS(120));
+            std::this_thread::sleep_for(std::chrono::milliseconds(120));
             continue;
         }
 
@@ -486,10 +467,10 @@ void AudioService::EnableWakeWordDetection(bool enable) {
             wake_word_initialized_ = true;
         }
         wake_word_->Start();
-        xEventGroupSetBits(event_group_, AS_EVENT_WAKE_WORD_RUNNING);
+        event_group_->set_bits(AS_EVENT_WAKE_WORD_RUNNING);
     } else {
         wake_word_->Stop();
-        xEventGroupClearBits(event_group_, AS_EVENT_WAKE_WORD_RUNNING);
+        event_group_->clear_bits(AS_EVENT_WAKE_WORD_RUNNING);
     }
 }
 
@@ -505,19 +486,19 @@ void AudioService::EnableVoiceProcessing(bool enable) {
         ResetDecoder();
         audio_input_need_warmup_ = true;
         audio_processor_->Start();
-        xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
+        event_group_->set_bits(AS_EVENT_AUDIO_PROCESSOR_RUNNING);
     } else {
         audio_processor_->Stop();
-        xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
+        event_group_->clear_bits(AS_EVENT_AUDIO_PROCESSOR_RUNNING);
     }
 }
 
 void AudioService::EnableAudioTesting(bool enable) {
     ESP_LOGI(TAG, "%s audio testing", enable ? "Enabling" : "Disabling");
     if (enable) {
-        xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING);
+        event_group_->set_bits(AS_EVENT_AUDIO_TESTING_RUNNING);
     } else {
-        xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING);
+        event_group_->clear_bits(AS_EVENT_AUDIO_TESTING_RUNNING);
         /* Copy audio_testing_queue_ to audio_decode_queue_ */
         std::lock_guard<std::mutex> lock(audio_queue_mutex_);
         audio_decode_queue_ = std::move(audio_testing_queue_);

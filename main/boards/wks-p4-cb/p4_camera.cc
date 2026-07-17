@@ -115,7 +115,7 @@ bool P4Camera::DetectMotion(const uint8_t* gray, int w, int h) {
     if (frame_buf_) {
         const uint16_t* rgb = (const uint16_t*)frame_buf_;
         int fw = width_, fh = height_;
-        int scan_h = (int)(fh * 0.40f);
+        int scan_h = (int)(fh * 0.80f);  // 覆盖画面 80% 高度（面部区域）
         if (scan_h < 1) scan_h = 1;
 
         int64_t sx = 0, sy = 0, sxx = 0, syy = 0;
@@ -213,7 +213,6 @@ void P4Camera::MotionTaskWrapper(void* arg) {
 
 void P4Camera::MotionTaskLoop() {
     gpio_set_direction(BULB_GPIO, GPIO_MODE_OUTPUT);
-
     gpio_set_level(BULB_GPIO, 1);
     ESP_LOGI(TAG, "Motion task started, bulb test ON");
     vTaskDelay(pdMS_TO_TICKS(1000));
@@ -223,11 +222,7 @@ void P4Camera::MotionTaskLoop() {
     while (true) {
         if (Capture()) {
             if (DetectMotion(gray_buf_, width_, height_)) {
-                ESP_LOGI(TAG, "Motion! Toggle bulb 500ms");
-                gpio_set_level(BULB_GPIO, 1);
-
-                vTaskDelay(pdMS_TO_TICKS(500));
-                gpio_set_level(BULB_GPIO, 0);
+                ESP_LOGI(TAG, "Motion detected");
                 if (motion_cb_) motion_cb_();
             }
         }

@@ -20,9 +20,9 @@ extern "C" {
 bool smart_home_get_fan_state(void);
 bool smart_home_get_light_state(void);
 bool smart_home_get_auto_mode(void);
-void smart_home_set_fan_state(bool on);
-void smart_home_set_light_state(bool on);
-void smart_home_set_auto_mode(bool auto_mode);
+bool smart_home_set_fan_state(bool on);   // 返回 false = auto_mode 阻止操作
+bool smart_home_set_light_state(bool on);
+bool smart_home_set_auto_mode(bool auto_mode);
 
 #ifdef __cplusplus
 }

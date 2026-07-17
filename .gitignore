@@ -27,7 +27,7 @@ Thumbs.db
 # Cache
 .cache/
 
-# Managed components checksums
-managed_components/**/CHECKSUMS.json
+# Managed components (downloaded by idf.py reconfigure)
+managed_components/
 
 

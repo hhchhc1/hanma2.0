@@ -7,9 +7,7 @@
 #include <chrono>
 #include <mutex>
 
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
-#include <freertos/event_groups.h>
+#include "posix_compat/posix_compat.h"
 #include <esp_timer.h>
 
 #include <opus_encoder.h>
@@ -91,8 +89,8 @@ public:
     const std::string& GetLastWakeWord() const;
     bool IsVoiceDetected() const { return voice_detected_; }
     bool IsIdle();
-    bool IsWakeWordRunning() const { return xEventGroupGetBits(event_group_) & AS_EVENT_WAKE_WORD_RUNNING; }
-    bool IsAudioProcessorRunning() const { return xEventGroupGetBits(event_group_) & AS_EVENT_AUDIO_PROCESSOR_RUNNING; }
+    bool IsWakeWordRunning() const { return event_group_->get_bits() & AS_EVENT_WAKE_WORD_RUNNING; }
+    bool IsAudioProcessorRunning() const { return event_group_->get_bits() & AS_EVENT_AUDIO_PROCESSOR_RUNNING; }
 
     void EnableWakeWordDetection(bool enable);
     void EnableVoiceProcessing(bool enable);
@@ -121,12 +119,9 @@ private:
     OpusResampler output_resampler_;
     DebugStatistics debug_statistics_;
 
-    EventGroupHandle_t event_group_;
+    posix::EventGroup *event_group_;
 
     // Audio encode / decode
-    TaskHandle_t audio_input_task_handle_ = nullptr;
-    TaskHandle_t audio_output_task_handle_ = nullptr;
-    TaskHandle_t opus_codec_task_handle_ = nullptr;
     std::mutex audio_queue_mutex_;
     std::condition_variable audio_queue_cv_;
     std::deque<std::unique_ptr<AudioStreamPacket>> audio_decode_queue_;

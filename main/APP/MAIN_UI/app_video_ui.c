@@ -690,10 +690,7 @@ void lv_video(void *pvParameters)
                     {
                         xSemaphoreTake(video_activate_member, 20);
                         printf("exit video\n");
-                        while(1)
-                        {
-                            vTaskDelay(pdMS_TO_TICKS(10));
-                        }
+                        break;  // 修复死锁: 退出信号 → 跳出循环正常结束
                     }
                     else if (video_activate_member == video_xSemaphore_starst_pause)
                     {

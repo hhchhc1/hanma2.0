@@ -251,6 +251,20 @@ public:
         gpio_config(&io_conf);
 		gpio_set_level(GPIO_NUM_12, 1);
 
+		// 上电立即初始化风扇 GPIO 为低电平，防止浮空导致风扇误转
+		{
+		    gpio_config_t fan_cfg = {
+		        .pin_bit_mask = (1ULL << GPIO_NUM_36) | (1ULL << GPIO_NUM_7),
+		        .mode = GPIO_MODE_OUTPUT,
+		        .pull_up_en = GPIO_PULLUP_DISABLE,
+		        .pull_down_en = GPIO_PULLDOWN_ENABLE,
+		        .intr_type = GPIO_INTR_DISABLE,
+		    };
+		    gpio_config(&fan_cfg);
+		    gpio_set_level(GPIO_NUM_36, 0);
+		    gpio_set_level(GPIO_NUM_7, 0);
+		}
+
 		// Camera power-up: PWDN(GPIO27)=LOW, RST(GPIO26)=HIGH
 		{
 		    gpio_config_t cam_pwr = {

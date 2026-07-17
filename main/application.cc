@@ -1,4 +1,5 @@
 #include "application.h"
+#include "posix_compat/posix_compat.h"
 #include "board.h"
 #include "display.h"
 #include "system_info.h"
@@ -12,6 +13,8 @@
 #include "sensors/bh1750.h"
 
 #include <cstring>
+#include <chrono>
+#include <thread>
 #include <esp_log.h>
 #include <cJSON.h>
 #include <driver/gpio.h>
@@ -51,7 +54,7 @@ static const char* const STATE_STRINGS[] = {
 };
 
 Application::Application() {
-    event_group_ = xEventGroupCreate();
+    event_group_ = posix::event_group_create();
 
 #if CONFIG_USE_DEVICE_AEC && CONFIG_USE_SERVER_AEC
 #error "CONFIG_USE_DEVICE_AEC and CONFIG_USE_SERVER_AEC cannot be enabled at the same time"
@@ -66,7 +69,7 @@ Application::Application() {
     esp_timer_create_args_t clock_timer_args = {
         .callback = [](void* arg) {
             Application* app = (Application*)arg;
-            xEventGroupSetBits(app->event_group_, MAIN_EVENT_CLOCK_TICK);
+            app->event_group_->set_bits(MAIN_EVENT_CLOCK_TICK);
         },
         .arg = this,
         .dispatch_method = ESP_TIMER_TASK,
@@ -98,7 +101,7 @@ Application::~Application() {
         esp_timer_stop(announce_timer_handle_);
         esp_timer_delete(announce_timer_handle_);
     }
-    vEventGroupDelete(event_group_);
+    posix::event_group_delete(event_group_);
 }
 
 void Application::CheckNewVersion(Ota& ota) {
@@ -125,7 +128,7 @@ void Application::CheckNewVersion(Ota& ota) {
 
             ESP_LOGW(TAG, "Check new version failed, retry in %d seconds (%d/%d)", retry_delay, retry_count, MAX_RETRY);
             for (int i = 0; i < retry_delay; i++) {
-                vTaskDelay(pdMS_TO_TICKS(1000));
+                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
                 if (device_state_ == kDeviceStateIdle) {
                     break;
                 }
@@ -139,7 +142,7 @@ void Application::CheckNewVersion(Ota& ota) {
         if (ota.HasNewVersion()) {
             Alert(Lang::Strings::OTA_UPGRADE, Lang::Strings::UPGRADING, "download", Lang::Sounds::OGG_UPGRADE);
 
-            vTaskDelay(pdMS_TO_TICKS(3000));
+            std::this_thread::sleep_for(std::chrono::milliseconds(3000));
 
             SetDeviceState(kDeviceStateUpgrading);
             
@@ -148,7 +151,7 @@ void Application::CheckNewVersion(Ota& ota) {
 
             board.SetPowerSaveMode(false);
             audio_service_.Stop();
-            vTaskDelay(pdMS_TO_TICKS(1000));
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
             bool upgrade_success = ota.StartUpgrade([display](int progress, size_t speed) {
                 std::thread([display, progress, speed]() {
@@ -164,13 +167,13 @@ void Application::CheckNewVersion(Ota& ota) {
                 audio_service_.Start(); // Restart audio service
                 board.SetPowerSaveMode(true); // Restore power save mode
                 Alert(Lang::Strings::ERROR, Lang::Strings::UPGRADE_FAILED, "circle_xmark", Lang::Sounds::OGG_EXCLAMATION);
-                vTaskDelay(pdMS_TO_TICKS(3000));
+                std::this_thread::sleep_for(std::chrono::milliseconds(3000));
                 // Continue to normal operation (don't break, just fall through)
             } else {
                 // Upgrade success, reboot immediately
                 ESP_LOGI(TAG, "Firmware upgrade successful, rebooting...");
                 display->SetChatMessage("system", "Upgrade successful, rebooting...");
-                vTaskDelay(pdMS_TO_TICKS(1000)); // Brief pause to show message
+                std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // Brief pause to show message
                 Reboot();
                 return; // This line will never be reached after reboot
             }
@@ -179,7 +182,7 @@ void Application::CheckNewVersion(Ota& ota) {
         // No new version, mark the current version as valid
         ota.MarkCurrentVersionValid();
         if (!ota.HasActivationCode() && !ota.HasActivationChallenge()) {
-            xEventGroupSetBits(event_group_, MAIN_EVENT_CHECK_NEW_VERSION_DONE);
+            event_group_->set_bits(MAIN_EVENT_CHECK_NEW_VERSION_DONE);
             // Exit the loop if done checking new version
             break;
         }
@@ -195,12 +198,12 @@ void Application::CheckNewVersion(Ota& ota) {
             ESP_LOGI(TAG, "Activating... %d/%d", i + 1, 10);
             esp_err_t err = ota.Activate();
             if (err == ESP_OK) {
-                xEventGroupSetBits(event_group_, MAIN_EVENT_CHECK_NEW_VERSION_DONE);
+                event_group_->set_bits(MAIN_EVENT_CHECK_NEW_VERSION_DONE);
                 break;
             } else if (err == ESP_ERR_TIMEOUT) {
-                vTaskDelay(pdMS_TO_TICKS(3000));
+                std::this_thread::sleep_for(std::chrono::milliseconds(3000));
             } else {
-                vTaskDelay(pdMS_TO_TICKS(10000));
+                std::this_thread::sleep_for(std::chrono::milliseconds(10000));
             }
             if (device_state_ == kDeviceStateIdle) {
                 break;
@@ -376,21 +379,21 @@ void Application::Start() {
 
     AudioServiceCallbacks callbacks;
     callbacks.on_send_queue_available = [this]() {
-        xEventGroupSetBits(event_group_, MAIN_EVENT_SEND_AUDIO);
+        event_group_->set_bits(MAIN_EVENT_SEND_AUDIO);
     };
     callbacks.on_wake_word_detected = [this](const std::string& wake_word) {
-        xEventGroupSetBits(event_group_, MAIN_EVENT_WAKE_WORD_DETECTED);
+        event_group_->set_bits(MAIN_EVENT_WAKE_WORD_DETECTED);
     };
     callbacks.on_vad_change = [this](bool speaking) {
-        xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
+        event_group_->set_bits(MAIN_EVENT_VAD_CHANGE);
     };
     audio_service_.SetCallbacks(callbacks);
 
     // Start the main event loop task with priority 3
-    xTaskCreate([](void* arg) {
-        ((Application*)arg)->MainEventLoop();
-        vTaskDelete(NULL);
-    }, "main_event_loop", 2048 * 4, this, 3, &main_event_loop_task_handle_);
+    posix::task_create({"main_event_loop", 2048 * 4, 3, -1}, [this]() {
+        main_event_loop_task_handle_ = xTaskGetCurrentTaskHandle();
+        MainEventLoop();
+    });
 
     /* Start the clock timer to update the status bar */
     esp_timer_start_periodic(clock_timer_handle_, 1000000);
@@ -429,7 +432,7 @@ void Application::Start() {
 
     protocol_->OnNetworkError([this](const std::string& message) {
         last_error_message_ = message;
-        xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
+        event_group_->set_bits(MAIN_EVENT_ERROR);
     });
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
         if (device_state_ == kDeviceStateSpeaking) {
@@ -571,7 +574,7 @@ void Application::Schedule(std::function<void()> callback) {
         std::lock_guard<std::mutex> lock(mutex_);
         main_tasks_.push_back(std::move(callback));
     }
-    xEventGroupSetBits(event_group_, MAIN_EVENT_SCHEDULE);
+    event_group_->set_bits(MAIN_EVENT_SCHEDULE);
 }
 
 // The Main Event Loop controls the chat state and websocket connection
@@ -579,12 +582,12 @@ void Application::Schedule(std::function<void()> callback) {
 // they should use Schedule to call this function
 void Application::MainEventLoop() {
     while (true) {
-        auto bits = xEventGroupWaitBits(event_group_, MAIN_EVENT_SCHEDULE |
+        auto bits = event_group_->wait_bits(MAIN_EVENT_SCHEDULE |
             MAIN_EVENT_SEND_AUDIO |
             MAIN_EVENT_WAKE_WORD_DETECTED |
             MAIN_EVENT_VAD_CHANGE |
             MAIN_EVENT_CLOCK_TICK |
-            MAIN_EVENT_ERROR, pdTRUE, pdFALSE, portMAX_DELAY);
+            MAIN_EVENT_ERROR, true, false, 0);
 
         if (bits & MAIN_EVENT_ERROR) {
             SetDeviceState(kDeviceStateIdle);
@@ -801,7 +804,8 @@ void Application::SendMcpMessage(const std::string& payload) {
         return;
     }
 
-    // Make sure you are using main thread to send MCP message
+    // 用 FreeRTOS 原生 API 代替 pthread_self() —
+    // MQTT/WiFi 等回调运行在 FreeRTOS 原生任务上，不能用 pthread API
     if (xTaskGetCurrentTaskHandle() == main_event_loop_task_handle_) {
         ESP_LOGI(TAG, "Send MCP message in main thread");
         protocol_->SendMcpMessage(payload);
@@ -875,7 +879,7 @@ static void PlayPcmOrWarn(AudioService& audio, const char* name,
     ESP_LOGI(TAG, "PCM %s samples=%u", name, n);
     if (n > 100) {
         audio.PlayPCM(s, n);
-        while (!audio.IsIdle()) vTaskDelay(pdMS_TO_TICKS(20));
+        while (!audio.IsIdle()) std::this_thread::sleep_for(std::chrono::milliseconds(20));
     } else {
         ESP_LOGW(TAG, "PCM %s too small (%u)", name, n);
     }
@@ -894,21 +898,21 @@ static void PlayDigits(AudioService& audio, int value) {
         int d = buf[i] - '0';
         if (d >= 0 && d <= 9) {
             audio.PlaySound(*digit_sounds[d]);
-            while (!audio.IsIdle()) vTaskDelay(pdMS_TO_TICKS(20));
+            while (!audio.IsIdle()) std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
     }
 }
 
 void Application::AnnounceTemperature() {
-    xTaskCreate([](void* arg) {
+    posix::task_create({"announce_tts", 4096, 1, -1}, []() {
         float temp = dht22_temperature;
         float hum = dht22_humidity;
-        if (!dht22_valid) { vTaskDelete(NULL); return; }
+        if (!dht22_valid) { return; }
 
         int int_temp = (int)(temp + 0.5f);
         int int_hum = (int)(hum + 0.5f);
-        if (int_temp < -50 || int_temp > 100) { vTaskDelete(NULL); return; }
-        if (int_hum < 0 || int_hum > 100) { vTaskDelete(NULL); return; }
+        if (int_temp < -50 || int_temp > 100) { return; }
+        if (int_hum < 0 || int_hum > 100) { return; }
 
         ESP_LOGI(TAG, "Announcing: %d C, %d %%", int_temp, int_hum);
 
@@ -922,7 +926,7 @@ void Application::AnnounceTemperature() {
                       pcm_she_shi_du_start, pcm_she_shi_du_end);
 
         // --- Gap between temp and humidity (~4s) ---
-        vTaskDelay(pdMS_TO_TICKS(4000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(4000));
 
         // --- Humidity ---
         PlayPcmOrWarn(audio, "dang_qian_shi_du",
@@ -931,8 +935,7 @@ void Application::AnnounceTemperature() {
         PlayPcmOrWarn(audio, "bai_fen_bi",
                       pcm_bai_fen_bi_start, pcm_bai_fen_bi_end);
 
-        vTaskDelete(NULL);
-    }, "announce_tts", 4096, this, 1, NULL);
+    });
 }
 
 void Application::SetReminder(int seconds) {

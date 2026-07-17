@@ -13,20 +13,28 @@
 
 #include "mcp_server.h"
 #include "smart_home_web_server.h"
+#include "matter_device/smart_home_matter_init.h"
 
 #define TAG "ExtraScreens"
 
 #define FAN_INA_GPIO   GPIO_NUM_36
 #define FAN_INB_GPIO   GPIO_NUM_7
-#define BULB_GPIO      GPIO_NUM_12
 
 static const char *WEEKDAYS[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
 
-static bool s_fan_on = false;
-static bool s_light_on = false;
-static bool s_auto_mode = false;
+// 状态变量移到 smart_home_state 命名空间，供 Matter 框架访问
+namespace smart_home_state {
+    bool fan_on = false;
+    bool light_on = false;
+    bool auto_mode = false;
+} // namespace smart_home_state
+
+// 兼容别名：原代码继续用 s_ 前缀
+#define s_fan_on    smart_home_state::fan_on
+#define s_light_on  smart_home_state::light_on
+#define s_auto_mode smart_home_state::auto_mode
+
 static bool s_fan_gpio_init = false;
-static bool s_bulb_gpio_init = false;
 
 static lv_obj_t *s_temp_label = NULL;
 static lv_obj_t *s_humid_label = NULL;
@@ -79,14 +87,26 @@ static void set_fan_hw(bool on)
     gpio_set_level(FAN_INB_GPIO, on ? 1 : 0);
 }
 
-static void set_light_hw(bool on)
+// 灯泡控制 GPIO12（与摄像头电源共用同一引脚，原项目设计如此）
+static void set_light_hw_impl(bool on)
 {
-    if (!s_bulb_gpio_init) {
-        gpio_set_direction(BULB_GPIO, GPIO_MODE_OUTPUT);
-        gpio_set_level(BULB_GPIO, 0);
-        s_bulb_gpio_init = true;
+    gpio_set_level(GPIO_NUM_12, on ? 1 : 0);
+}
+
+// smart_home_state 命名空间的公开接口（供 Matter 框架和 Web API 调用）
+namespace smart_home_state {
+    void set_fan_hw(bool on) {
+        if (!s_fan_gpio_init) {
+            gpio_set_direction(FAN_INA_GPIO, GPIO_MODE_OUTPUT);
+            gpio_set_level(FAN_INA_GPIO, 0);
+            gpio_set_direction(FAN_INB_GPIO, GPIO_MODE_OUTPUT);
+            gpio_set_level(FAN_INB_GPIO, 0);
+            s_fan_gpio_init = true;
+        }
+        gpio_set_level(FAN_INA_GPIO, 0);
+        gpio_set_level(FAN_INB_GPIO, on ? 1 : 0);
     }
-    gpio_set_level(BULB_GPIO, on ? 1 : 0);
+    void set_light_hw(bool on) { set_light_hw_impl(on); }
 }
 
 static void update_fan_ui(void)
@@ -107,7 +127,7 @@ static void update_fan_ui(void)
 
 static void update_light_ui(void)
 {
-    set_light_hw(s_light_on);
+    set_light_hw_impl(s_light_on);
     if (s_light_on) {
         lv_obj_set_style_bg_color(s_light_btn, lv_color_hex(0xFFC107), LV_STATE_DEFAULT);
         lv_obj_set_style_bg_opa(s_light_btn, LV_OPA_COVER, LV_STATE_DEFAULT);
@@ -400,6 +420,15 @@ static lv_obj_t *create_single_chart(lv_obj_t *parent, const char *title,
 
 void extra_screens_create(lv_obj_t *tv)
 {
+    // 上电立即初始化风扇 GPIO 为低电平，防止引脚浮空导致风扇误转
+    if (!s_fan_gpio_init) {
+        gpio_set_direction(FAN_INA_GPIO, GPIO_MODE_OUTPUT);
+        gpio_set_level(FAN_INA_GPIO, 0);
+        gpio_set_direction(FAN_INB_GPIO, GPIO_MODE_OUTPUT);
+        gpio_set_level(FAN_INB_GPIO, 0);
+        s_fan_gpio_init = true;
+    }
+
     lv_coord_t sw = lv_disp_get_hor_res(NULL);
 
     /* ========== Tile 0: Master page (clock/date/weather) ========== */
@@ -822,25 +851,28 @@ bool smart_home_get_fan_state(void) { return s_fan_on; }
 bool smart_home_get_light_state(void) { return s_light_on; }
 bool smart_home_get_auto_mode(void) { return s_auto_mode; }
 
-void smart_home_set_fan_state(bool on)
+bool smart_home_set_fan_state(bool on)
 {
-    if (s_auto_mode) return;
+    if (s_auto_mode) return false;  // auto_mode 阻止手动操作
     s_fan_on = on;
     update_fan_ui();
+    return true;
 }
 
-void smart_home_set_light_state(bool on)
+bool smart_home_set_light_state(bool on)
 {
-    if (s_auto_mode) return;
+    if (s_auto_mode) return false;
     s_light_on = on;
     update_light_ui();
+    return true;
 }
 
-void smart_home_set_auto_mode(bool auto_mode)
+bool smart_home_set_auto_mode(bool auto_mode)
 {
     s_auto_mode = auto_mode;
     update_mode_ui();
     if (s_auto_mode) {
         auto_control();
     }
+    return true;
 }
