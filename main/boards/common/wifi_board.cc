@@ -10,6 +10,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <esp_log.h>
+#include <esp_netif.h>
 
 #include <font_awesome.h>
 #include <wifi_station.h>
@@ -78,12 +79,10 @@ void WifiBoard::StartNetwork() {
     }
 
     auto& ssid_manager = SsidManager::GetInstance();
-    auto ssid_list = ssid_manager.GetSsidList();
 
-    // Pre-configure default Wi-Fi network for STA internet access
-    if (ssid_list.empty()) {
-        ssid_manager.AddSsid("ZBCK-E", "ZBCK-E123");
-    }
+    // 比赛环境：清除 NVS 中所有旧凭据，只用手机热点 RedmiK60
+    ssid_manager.Clear();
+    ssid_manager.AddSsid("RedmiK60", "wpp830718");
 
     auto& wifi_station = WifiStation::GetInstance();
     wifi_station.OnScanBegin([this]() {
@@ -110,7 +109,14 @@ void WifiBoard::StartNetwork() {
 
     // Try to connect to WiFi, if failed, launch the WiFi configuration AP
     if (!wifi_station.WaitForConnected(60 * 1000)) {
+        ESP_LOGW(TAG, "WiFi connection failed, entering config mode");
         wifi_station.Stop();
+        // 销毁 SmartHome 已配置的 AP netif，否则 EnterWifiConfigMode 会重复创建导致崩溃
+        esp_netif_t *ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+        if (ap_netif) {
+            esp_netif_destroy(ap_netif);
+            ESP_LOGI(TAG, "Destroyed old AP netif before config mode");
+        }
         wifi_config_mode_ = true;
         EnterWifiConfigMode();
         return;

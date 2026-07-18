@@ -16,8 +16,9 @@
 #include <map>
 #include <mutex>
 
-#define MQTT_PING_INTERVAL_SECONDS 90
-#define MQTT_RECONNECT_INTERVAL_MS 60000
+#define MQTT_PING_INTERVAL_SECONDS 60
+#define MQTT_RECONNECT_INTERVAL_MS 5000
+#define MQTT_RECONNECT_MAX_MS 60000
 
 #define MQTT_PROTOCOL_SERVER_HELLO_EVENT (1 << 0)
 
@@ -47,6 +48,7 @@ private:
     uint32_t local_sequence_;
     uint32_t remote_sequence_;
     esp_timer_handle_t reconnect_timer_;
+    int reconnect_count_ = 0;
 
     bool StartMqttClient(bool report_error=false);
     void ParseServerHello(const cJSON* root);

@@ -27,8 +27,8 @@
 #define BH1750_SCL_GPIO     GPIO_NUM_7
 
 // 家里的 WiFi 名称和密码 (C3 和 P4 都连同一个路由器)
-#define WIFI_SSID           "ZBCK-E"
-#define WIFI_PASS           "ZBCK-E123"
+#define WIFI_SSID           "RedmiK60"
+#define WIFI_PASS           "wpp830718"
 
 // P4 mDNS 主机名 (P4 端已配置 mDNS 广播 xiaozhi.local)
 #define P4_MDNS_HOST        "xiaozhi.local"

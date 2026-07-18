@@ -56,7 +56,7 @@ bool MqttProtocol::StartMqttClient(bool report_error) {
     auto client_id = settings.GetString("client_id");
     auto username = settings.GetString("username");
     auto password = settings.GetString("password");
-    int keepalive_interval = settings.GetInt("keepalive", 240);
+    int keepalive_interval = settings.GetInt("keepalive", 60);
     publish_topic_ = settings.GetString("publish_topic");
 
     if (endpoint.empty()) {
@@ -75,11 +75,19 @@ bool MqttProtocol::StartMqttClient(bool report_error) {
         if (on_disconnected_ != nullptr) {
             on_disconnected_();
         }
-        ESP_LOGI(TAG, "MQTT disconnected, schedule reconnect in %d seconds", MQTT_RECONNECT_INTERVAL_MS / 1000);
-        esp_timer_start_once(reconnect_timer_, MQTT_RECONNECT_INTERVAL_MS * 1000);
+        // 指数退避重连：5s → 10s → 20s → ... → 60s 封顶
+        int delay = MQTT_RECONNECT_INTERVAL_MS;
+        for (int i = 0; i < reconnect_count_ && delay < MQTT_RECONNECT_MAX_MS; i++) {
+            delay *= 2;
+        }
+        if (delay > MQTT_RECONNECT_MAX_MS) delay = MQTT_RECONNECT_MAX_MS;
+        reconnect_count_++;
+        ESP_LOGI(TAG, "MQTT disconnected, reconnect #%d in %d seconds", reconnect_count_, delay / 1000);
+        esp_timer_start_once(reconnect_timer_, delay * 1000);
     });
 
     mqtt_->OnConnected([this]() {
+        reconnect_count_ = 0;  // 连上就重置退避计数
         if (on_connected_ != nullptr) {
             on_connected_();
         }

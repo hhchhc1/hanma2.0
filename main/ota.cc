@@ -15,6 +15,7 @@
 #endif
 
 #include <cstring>
+#include <cctype>
 #include <vector>
 #include <sstream>
 #include <algorithm>
@@ -381,18 +382,31 @@ std::vector<int> Ota::ParseVersion(const std::string& version) {
     std::vector<int> versionNumbers;
     std::stringstream ss(version);
     std::string segment;
-    
+
     while (std::getline(ss, segment, '.')) {
+        // 检查是否全为数字（避免 std::stoi 抛异常，ESP-IDF 禁用了异常）
+        if (segment.empty() || !std::all_of(segment.begin(), segment.end(), ::isdigit)) {
+            ESP_LOGW(TAG, "ParseVersion: non-numeric segment '%s' in version '%s'",
+                     segment.c_str(), version.c_str());
+            return {};
+        }
         versionNumbers.push_back(std::stoi(segment));
     }
-    
+
     return versionNumbers;
 }
 
 bool Ota::IsNewVersionAvailable(const std::string& currentVersion, const std::string& newVersion) {
     std::vector<int> current = ParseVersion(currentVersion);
     std::vector<int> newer = ParseVersion(newVersion);
-    
+
+    // 任一版本解析失败（如 git describe 格式 "af50422-dirty"），无法比较
+    if (current.empty() || newer.empty()) {
+        ESP_LOGI(TAG, "Cannot compare versions: current=%s (parsed=%d segments), new=%s (parsed=%d segments)",
+                 currentVersion.c_str(), (int)current.size(), newVersion.c_str(), (int)newer.size());
+        return false;
+    }
+
     for (size_t i = 0; i < std::min(current.size(), newer.size()); ++i) {
         if (newer[i] > current[i]) {
             return true;
@@ -400,7 +414,7 @@ bool Ota::IsNewVersionAvailable(const std::string& currentVersion, const std::st
             return false;
         }
     }
-    
+
     return newer.size() > current.size();
 }
 

@@ -30,7 +30,7 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms) {
     srmodel_list_t *models = esp_srmodel_init("model");
     char* ns_model_name = esp_srmodel_filter(models, ESP_NSNET_PREFIX, NULL);
     char* vad_model_name = esp_srmodel_filter(models, ESP_VADN_PREFIX, NULL);
-    
+
     afe_config_t* afe_config = afe_config_init(input_format.c_str(), NULL, AFE_TYPE_VC, AFE_MODE_HIGH_PERF);
     afe_config->aec_mode = AEC_MODE_VOIP_HIGH_PERF;
     afe_config->vad_mode = VAD_MODE_0;
@@ -62,12 +62,13 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms) {
 
     afe_iface_ = esp_afe_handle_from_config(afe_config);
     afe_data_ = afe_iface_->create_from_config(afe_config);
-    
+
+    // 提高优先级避免被 audio_input(prio=8) 饿死，加大栈避免溢出
     xTaskCreate([](void* arg) {
         auto this_ = (AfeAudioProcessor*)arg;
         this_->AudioProcessorTask();
         vTaskDelete(NULL);
-    }, "audio_communication", 4096, this, 3, NULL);
+    }, "audio_communication", 5120, this, 8, NULL);
 }
 
 AfeAudioProcessor::~AfeAudioProcessor() {
@@ -97,9 +98,8 @@ void AfeAudioProcessor::Start() {
 
 void AfeAudioProcessor::Stop() {
     xEventGroupClearBits(event_group_, PROCESSOR_RUNNING);
-    if (afe_data_ != nullptr) {
-        afe_iface_->reset_buffer(afe_data_);
-    }
+    // 不在这里 reset_buffer：会导致 fetch_with_delay 死锁永远卡住
+    // reset 在 AudioProcessorTask 循环内安全执行
 }
 
 bool AfeAudioProcessor::IsRunning() {
@@ -121,16 +121,28 @@ void AfeAudioProcessor::AudioProcessorTask() {
         feed_size, fetch_size);
 
     while (true) {
+        // 等待 PROCESSOR_RUNNING 位被设置
         xEventGroupWaitBits(event_group_, PROCESSOR_RUNNING, pdFALSE, pdTRUE, portMAX_DELAY);
 
-        auto res = afe_iface_->fetch_with_delay(afe_data_, portMAX_DELAY);
+        // 用 100ms 超时而不是 portMAX_DELAY，避免 Stop() 后 fetch 永远卡死
+        auto res = afe_iface_->fetch_with_delay(afe_data_, pdMS_TO_TICKS(100));
+
+        // 已停止 → 清空内部缓冲区，回到等待状态
         if ((xEventGroupGetBits(event_group_) & PROCESSOR_RUNNING) == 0) {
+            if (afe_data_ != nullptr) {
+                afe_iface_->reset_buffer(afe_data_);
+            }
+            output_buffer_.clear();
             continue;
         }
-        if (res == nullptr || res->ret_value == ESP_FAIL) {
-            if (res != nullptr) {
-                ESP_LOGI(TAG, "Error code: %d", res->ret_value);
-            }
+
+        // 超时无事发生，继续等
+        if (res == nullptr) {
+            continue;
+        }
+
+        if (res->ret_value == ESP_FAIL) {
+            ESP_LOGI(TAG, "Error code: %d", res->ret_value);
             continue;
         }
 
@@ -147,10 +159,10 @@ void AfeAudioProcessor::AudioProcessorTask() {
 
         if (output_callback_) {
             size_t samples = res->data_size / sizeof(int16_t);
-            
+
             // Add data to buffer
             output_buffer_.insert(output_buffer_.end(), res->data, res->data + samples);
-            
+
             // Output complete frames when buffer has enough data
             while (output_buffer_.size() >= frame_samples_) {
                 if (output_buffer_.size() == frame_samples_) {
