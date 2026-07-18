@@ -111,6 +111,13 @@
   }
   .problem-box h3 { color: #e74c3c; }
   .solution-box h3 { color: #2ecc71; }
+  .colloquial {
+    margin-top: 18px; padding: 14px 22px; z-index: 1;
+    background: rgba(255,204,128,0.06); border-left: 3px solid #ffcc80;
+    border-radius: 0 10px 10px 0; font-size: 17px; color: #ffcc80;
+    font-style: italic; line-height: 1.6;
+  }
+  .colloquial .label { font-style: normal; font-weight: 700; margin-right: 6px; }
 </style>
 </head>
 <body>
@@ -200,6 +207,7 @@ posix::task_create({<span class="str">"dht22"</span>, 4096, 5, -1}, func);</div>
 ├── posix_queue.h   — 消息队列标准接口
 ├── posix_task.h    — 任务创建标准接口
 └── posix_timer.h   — 定时器标准接口</div>
+  <div class="colloquial"><span class="label">💬 一句话：</span>把 68 个电器的插头全换成国标，以后搬家（换系统）只要换墙上插座，电器不用动。</div>
   <div class="slide-num">3 / 8</div>
 </div>
 
@@ -226,6 +234,7 @@ SYSTEM   → 内核/任务栈</div>
       </table>
     </div>
   </div>
+  <div class="colloquial"><span class="label">💬 一句话：</span>大房间隔成 5 个小单间 + 每件物品贴封条 + 房门上锁，谁乱动马上报警。</div>
   <div class="slide-num">4 / 8</div>
 </div>
 
@@ -259,6 +268,7 @@ SYSTEM   → 内核/任务栈</div>
       <p style="margin-top:10px;font-size:15px;">新增 <code style="color:#4fc3f7;">GET /api/matter/descriptor</code> 返回完整设备树 JSON</p>
     </div>
   </div>
+  <div class="colloquial"><span class="label">💬 一句话：</span>所有智能设备用同一套遥控器，新增设备只要登记一下就能用，不用再单独写代码。</div>
   <div class="slide-num">5 / 8</div>
 </div>
 
@@ -292,6 +302,7 @@ SYSTEM   → 内核/任务栈</div>
       </div>
     </div>
   </div>
+  <div class="colloquial"><span class="label">💬 一句话：</span>P4 给自己起了个永不变的名字（微信号），C3 每次开机喊一声就能找到它，不管它 IP 号码怎么变。</div>
   <div class="slide-num">6 / 8</div>
 </div>
 
@@ -326,11 +337,11 @@ SYSTEM   → 内核/任务栈</div>
 <div class="slide">
   <h2>📊 改进效果汇总</h2>
   <table>
-    <tr><th>改进项</th><th>核心指标</th><th>效果</th></tr>
-    <tr><td>POSIX 标准化</td><td>68 文件解耦</td><td>换 RTOS = 只改 4 个底层文件</td></tr>
-    <tr><td>内存隔离保护</td><td>5 域 + 3 层防护</td><td>野指针即时捕获，跨域分配拒绝</td></tr>
-    <tr><td>类 Matter 模型</td><td>6 MCP → 3 通用接口</td><td>设备模型标准化，自动生成设备树</td></tr>
-    <tr><td>mDNS 自动发现</td><td><span class="big-num" style="font-size:36px;">∞</span> 永久免维护</td><td>P4 IP 随意变，C3 自动跟上</td></tr>
+    <tr><th>改进项</th><th>核心指标</th><th>效果</th><th>通俗理解</th></tr>
+    <tr><td>POSIX 标准化</td><td>68 文件解耦</td><td>换 RTOS = 只改 4 个底层文件</td><td>统一插头，换系统只换插座</td></tr>
+    <tr><td>内存隔离保护</td><td>5 域 + 3 层防护</td><td>野指针即时捕获，跨域分配拒绝</td><td>隔单间 + 贴封条 + 硬件锁</td></tr>
+    <tr><td>类 Matter 模型</td><td>6 MCP → 3 通用接口</td><td>设备模型标准化，自动生成设备树</td><td>所有设备用同一套遥控器</td></tr>
+    <tr><td>mDNS 自动发现</td><td><span class="big-num" style="font-size:36px;">∞</span> 永久免维护</td><td>P4 IP 随意变，C3 自动跟上</td><td>P4 用微信号，C3 永远找得到</td></tr>
   </table>
   <div style="margin-top: 36px; display: flex; gap: 40px; z-index: 1; justify-content: center;">
     <div class="card" style="flex:1; text-align:center; max-width: 320px;">
