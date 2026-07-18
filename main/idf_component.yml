@@ -30,6 +30,7 @@ dependencies:
   espressif/esp_io_expander_tca95xx_16bit: ^2.0.0
   waveshare/esp_lcd_jd9365_10_1: '*'
   waveshare/esp_lcd_st7703: '*'
+  espressif/mdns: '*'
   ## Required IDF version
   idf:
     version: '>=5.4.0'

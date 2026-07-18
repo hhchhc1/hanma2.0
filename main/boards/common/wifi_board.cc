@@ -15,6 +15,7 @@
 #include <wifi_station.h>
 #include <wifi_configuration_ap.h>
 #include <ssid_manager.h>
+#include <mdns.h>
 #include "afsk_demod.h"
 #include "smart_home_web_server.h"
 
@@ -81,7 +82,7 @@ void WifiBoard::StartNetwork() {
 
     // Pre-configure default Wi-Fi network for STA internet access
     if (ssid_list.empty()) {
-        ssid_manager.AddSsid("ZBCK", "ZBCK-E123");
+        ssid_manager.AddSsid("ZBCK-E", "ZBCK-E123");
     }
 
     auto& wifi_station = WifiStation::GetInstance();
@@ -113,6 +114,16 @@ void WifiBoard::StartNetwork() {
         wifi_config_mode_ = true;
         EnterWifiConfigMode();
         return;
+    }
+
+    // Start mDNS so ESP32-C3 can discover P4 via xiaozhi.local
+    esp_err_t mdns_err = mdns_init();
+    if (mdns_err == ESP_OK) {
+        mdns_hostname_set("xiaozhi");
+        mdns_instance_name_set("XiaoZhi Smart Home P4");
+        ESP_LOGI(TAG, "mDNS started: xiaozhi.local");
+    } else {
+        ESP_LOGW(TAG, "mDNS init failed: %d (C3 auto-discovery unavailable)", mdns_err);
     }
 }
 

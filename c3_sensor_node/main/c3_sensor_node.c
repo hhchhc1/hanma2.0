@@ -6,6 +6,8 @@
 #include <nvs_flash.h>
 #include <esp_http_client.h>
 #include <cJSON.h>
+#include <netdb.h>
+#include <mdns.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "dht22.h"
@@ -14,7 +16,7 @@
 #define TAG "C3_SENSOR"
 
 // ================================================================
-// 用户配置 —�? 根据您的硬件接线修改这里
+// 用户配置 — 根据您的硬件接线修改这里
 // ================================================================
 
 // DHT22 数据引脚
@@ -28,13 +30,20 @@
 #define WIFI_SSID           "ZBCK-E"
 #define WIFI_PASS           "ZBCK-E123"
 
-// P4 主机 URL (IP 改为 P4 连接家庭 WiFi 的 IP)
-#define P4_SERVER_URL       "http://192.168.1.253/api/room2/sensors"
+// P4 mDNS 主机名 (P4 端已配置 mDNS 广播 xiaozhi.local)
+#define P4_MDNS_HOST        "xiaozhi.local"
+#define P4_SERVER_PATH      "/api/room2/sensors"
 
-// 数据上报间隔 (�?)
+// 数据上报间隔 (秒)
 #define REPORT_INTERVAL_SEC 5
 
+// 每 N 次上报后重新解析 P4 地址 (应对 IP 变化: 5s * 120 = 10分钟)
+#define MDNS_REFRESH_INTERVAL 120
+
 // ================================================================
+
+// 动态解析后的 P4 URL (启动时通过 mDNS 自动获取)
+static char p4_server_url[128] = {0};
 
 static void wifi_event_handler(void *arg, esp_event_base_t base,
                                int32_t id, void *data)
@@ -79,8 +88,46 @@ static void wifi_init(void)
     ESP_LOGI(TAG, "Connecting to WiFi: %s", WIFI_SSID);
 }
 
+// 通过 mDNS 解析 P4 的 IP 地址并构建 URL
+// 返回 true 表示解析成功
+static bool resolve_p4_url(void)
+{
+    struct addrinfo hints = {0};
+    struct addrinfo *res = NULL;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
+    int ret = getaddrinfo(P4_MDNS_HOST, NULL, &hints, &res);
+    if (ret != 0 || res == NULL) {
+        ESP_LOGW(TAG, "mDNS resolve '%s' failed: ret=%d", P4_MDNS_HOST, ret);
+        return false;
+    }
+
+    struct sockaddr_in *addr = (struct sockaddr_in *)res->ai_addr;
+    // lwIP getaddrinfo on ESP32 returns sin_addr in host byte order (LE)
+    uint32_t ip = ntohl(addr->sin_addr.s_addr);
+    char ip_str[16];
+    snprintf(ip_str, sizeof(ip_str), "%d.%d.%d.%d",
+             (int)((ip >> 24) & 0xFF),
+             (int)((ip >> 16) & 0xFF),
+             (int)((ip >> 8) & 0xFF),
+             (int)(ip & 0xFF));
+    snprintf(p4_server_url, sizeof(p4_server_url),
+             "http://%s%s", ip_str, P4_SERVER_PATH);
+
+    ESP_LOGI(TAG, "P4 resolved via mDNS: %s -> %s", P4_MDNS_HOST, p4_server_url);
+
+    freeaddrinfo(res);
+    return true;
+}
+
 static void send_sensor_data(float temp, float humid, float lux)
 {
+    if (p4_server_url[0] == '\0') {
+        ESP_LOGW(TAG, "P4 URL not resolved yet, skipping report");
+        return;
+    }
+
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "temperature", temp);
     cJSON_AddNumberToObject(root, "humidity", humid);
@@ -90,7 +137,7 @@ static void send_sensor_data(float temp, float humid, float lux)
     cJSON_Delete(root);
 
     esp_http_client_config_t cfg = {
-        .url = P4_SERVER_URL,
+        .url = p4_server_url,
         .method = HTTP_METHOD_POST,
         .timeout_ms = 5000,
     };
@@ -114,6 +161,21 @@ static void sensor_task(void *arg)
 {
     ESP_LOGI(TAG, "Sensor task started");
 
+    // 初始化 mDNS (C3 端也需要, LWIP mDNS 查询钩子才生效)
+    esp_err_t mdns_err = mdns_init();
+    if (mdns_err == ESP_OK) {
+        ESP_LOGI(TAG, "mDNS initialized on C3");
+    } else {
+        ESP_LOGW(TAG, "mDNS init failed: %d", mdns_err);
+    }
+
+    // 等待 mDNS 解析 P4 地址
+    ESP_LOGI(TAG, "Resolving P4 address via mDNS (%s)...", P4_MDNS_HOST);
+    while (!resolve_p4_url()) {
+        ESP_LOGW(TAG, "Retrying mDNS resolve in 5s...");
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
+
     // 初始化传感器
     dht22_init(DHT22_GPIO);
     dht22_start_reading_task();
@@ -124,6 +186,7 @@ static void sensor_task(void *arg)
     // 等待首次读数
     vTaskDelay(pdMS_TO_TICKS(3000));
 
+    int report_count = 0;
     while (1) {
         float temp = (dht22_valid && dht22_temperature > -10 && dht22_temperature < 60) ? dht22_temperature : -1;
         float humid = (dht22_valid && dht22_temperature > -10 && dht22_temperature < 60) ? dht22_humidity : -1;
@@ -136,6 +199,13 @@ static void sensor_task(void *arg)
             send_sensor_data(temp, humid, lux);
         } else {
             ESP_LOGW(TAG, "No valid sensor data yet");
+        }
+
+        // 定期重新解析 mDNS，应对 P4 IP 地址变化 (默认每 10 分钟)
+        report_count++;
+        if (report_count % MDNS_REFRESH_INTERVAL == 0) {
+            ESP_LOGI(TAG, "Re-resolving P4 address via mDNS...");
+            resolve_p4_url();
         }
 
         vTaskDelay(pdMS_TO_TICKS(REPORT_INTERVAL_SEC * 1000));
