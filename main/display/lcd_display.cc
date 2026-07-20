@@ -15,6 +15,7 @@
 
 #include "board.h"
 #include "display/extra_screens.h"
+#include "display/wifi_settings.h"
 
 #define TAG "LcdDisplay"
 
@@ -554,6 +555,17 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_text_font(battery_label_, fonts_.icon_font, 0);
     lv_obj_set_style_text_color(battery_label_, current_theme_.text, 0);
 
+    wifi_gear_label_ = lv_label_create(status_bar_);
+    lv_label_set_text(wifi_gear_label_, FONT_AWESOME_GEAR);
+    lv_obj_set_style_text_font(wifi_gear_label_, fonts_.icon_font, 0);
+    lv_obj_set_style_text_color(wifi_gear_label_, current_theme_.text, 0);
+    lv_obj_add_flag(wifi_gear_label_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_user_data(wifi_gear_label_, (void*)fonts_.text_font);
+    lv_obj_add_event_cb(wifi_gear_label_, [](lv_event_t *e) {
+        auto *font = (const lv_font_t*)lv_obj_get_user_data(lv_event_get_target(e));
+        wifi_settings_open(font);
+    }, LV_EVENT_CLICKED, nullptr);
+
 
     low_battery_popup_ = lv_obj_create(screen);
     lv_obj_set_scrollbar_mode(low_battery_popup_, LV_SCROLLBAR_MODE_OFF);
@@ -1034,6 +1046,17 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_text_font(battery_label_, fonts_.icon_font, 0);
     lv_obj_set_style_text_color(battery_label_, current_theme_.text, 0);
 
+    wifi_gear_label_ = lv_label_create(status_bar_);
+    lv_label_set_text(wifi_gear_label_, FONT_AWESOME_GEAR);
+    lv_obj_set_style_text_font(wifi_gear_label_, fonts_.icon_font, 0);
+    lv_obj_set_style_text_color(wifi_gear_label_, current_theme_.text, 0);
+    lv_obj_add_flag(wifi_gear_label_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_user_data(wifi_gear_label_, (void*)fonts_.text_font);
+    lv_obj_add_event_cb(wifi_gear_label_, [](lv_event_t *e) {
+        auto *font = (const lv_font_t*)lv_obj_get_user_data(lv_event_get_target(e));
+        wifi_settings_open(font);
+    }, LV_EVENT_CLICKED, nullptr);
+
     low_battery_popup_ = lv_obj_create(screen);
     lv_obj_set_scrollbar_mode(low_battery_popup_, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_size(low_battery_popup_, LV_HOR_RES * 0.9, fonts_.text_font->line_height * 2);
@@ -1260,6 +1283,9 @@ void LcdDisplay::SetTheme(const std::string& theme_name) {
         }
         if (battery_label_ != nullptr) {
             lv_obj_set_style_text_color(battery_label_, current_theme_.text, 0);
+        }
+        if (wifi_gear_label_ != nullptr) {
+            lv_obj_set_style_text_color(wifi_gear_label_, current_theme_.text, 0);
         }
         if (emotion_label_ != nullptr) {
             lv_obj_set_style_text_color(emotion_label_, current_theme_.text, 0);
