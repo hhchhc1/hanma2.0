@@ -146,11 +146,25 @@ static void send_sensor_data(float temp, float humid, float lux)
     esp_http_client_set_post_field(client, json, strlen(json));
 
     esp_err_t err = esp_http_client_perform(client);
+    int retry = 0;
+    while (err != ESP_OK && retry < 3) {
+        ESP_LOGW(TAG, "Report failed, err=%d, retry %d/3", err, retry + 1);
+        esp_http_client_cleanup(client);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        client = esp_http_client_init(&cfg);
+        esp_http_client_set_header(client, "Content-Type", "application/json");
+        esp_http_client_set_post_field(client, json, strlen(json));
+        err = esp_http_client_perform(client);
+        retry++;
+    }
     if (err == ESP_OK) {
         int status = esp_http_client_get_status_code(client);
-        ESP_LOGI(TAG, "Report OK, status=%d, data=%s", status, json);
+        ESP_LOGI(TAG, "Report OK, status=%d", status);
     } else {
-        ESP_LOGW(TAG, "Report failed, err=%d, data=%s", err, json);
+        ESP_LOGE(TAG, "Report failed after %d retries, err=%d", retry, err);
+        // TCP 可能卡死了，强制重解析 mDNS 并重建 URL（下次发请求就会用新的 TCP 连接）
+        ESP_LOGI(TAG, "Re-resolving P4 address after repeated failures...");
+        resolve_p4_url();
     }
 
     esp_http_client_cleanup(client);
