@@ -28,6 +28,7 @@ static i2c_master_bus_handle_t s_i2c_bus = NULL;
 static lv_obj_t *s_canvas = NULL;
 static lv_obj_t *s_loading_label = NULL;
 static uint8_t *s_canvas_buf[3] = {NULL, NULL, NULL};
+static uint8_t *s_display_buf = NULL;  // LVGL reads from this, PPA never touches it
 static int s_frame_count = 0;
 static int s_cam_width = 0;
 static int s_cam_height = 0;
@@ -309,7 +310,6 @@ static void camera_task(void *arg)
             break;
         }
 
-        // Deterministic buffer rotation (no shared-state between cores)
         int write_idx = s_frame_count % 3;
         s_frame_count++;
 
@@ -426,10 +426,20 @@ static void camera_task(void *arg)
             }
         }
 
-        // Swap buffer and invalidate under LVGL lock (PPA already scaled)
+        // 拷贝到专用显示缓冲区，消除 PPA 写入与 LVGL 读取的竞态
+        if (!s_display_buf) {
+            s_display_buf = (uint8_t*)heap_caps_aligned_alloc(CAM_BUF_CACHE_ALIGN, s_scaled_buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        }
+        if (s_display_buf) {
+            memcpy(s_display_buf, s_canvas_buf[write_idx], s_scaled_width * s_scaled_height * 2);
+            // Invalidate display cache so LVGL reads fresh memcpy'd data
+            esp_cache_msync(s_display_buf, s_scaled_buf_size,
+                            ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+        }
+
         if (s_canvas) {
             if (lvgl_port_lock(100)) {
-                lv_canvas_set_buffer(s_canvas, s_canvas_buf[write_idx],
+                lv_canvas_set_buffer(s_canvas, s_display_buf,
                                      s_scaled_width, s_scaled_height, LV_IMG_CF_TRUE_COLOR);
                 lv_obj_invalidate(s_canvas);
                 lvgl_port_unlock();
