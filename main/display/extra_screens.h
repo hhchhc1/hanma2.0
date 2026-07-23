@@ -4,7 +4,7 @@
 #include <lvgl.h>
 #include <cstdint>
 
-#define EXTRA_TILE_COUNT 7
+#define EXTRA_TILE_COUNT 8
 
 void extra_screens_create(lv_obj_t *tv);
 void extra_screens_update_time(void);

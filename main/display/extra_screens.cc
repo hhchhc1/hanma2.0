@@ -1,6 +1,7 @@
 #include "extra_screens.h"
 #include "application.h"
 #include "camera/camera_display.h"
+#include "display/gomoku.h"
 #include "sensors/dht22.h"
 #include "sensors/bh1750.h"
 #include "driver/gpio.h"
@@ -733,6 +734,11 @@ void extra_screens_create(lv_obj_t *tv)
         camera_started = true;
         camera_display_start();
     }
+
+    /* ========== Tile 6: Gomoku ========== */
+    lv_obj_t *tile6 = lv_tileview_add_tile(tv, 7, 0, LV_DIR_HOR);
+    lv_obj_set_style_bg_color(tile6, lv_color_hex(0x1a1a2e), LV_STATE_DEFAULT);
+    gomoku_create(tile6);
 }
 
 void extra_screens_update_time(void)
