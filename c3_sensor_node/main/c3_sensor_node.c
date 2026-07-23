@@ -121,11 +121,11 @@ static bool resolve_p4_url(void)
     return true;
 }
 
-static void send_sensor_data(float temp, float humid, float lux)
+static bool send_sensor_data(float temp, float humid, float lux)
 {
     if (p4_server_url[0] == '\0') {
         ESP_LOGW(TAG, "P4 URL not resolved yet, skipping report");
-        return;
+        return false;
     }
 
     cJSON *root = cJSON_CreateObject();
@@ -157,18 +157,17 @@ static void send_sensor_data(float temp, float humid, float lux)
         err = esp_http_client_perform(client);
         retry++;
     }
-    if (err == ESP_OK) {
+    bool ok = (err == ESP_OK);
+    if (ok) {
         int status = esp_http_client_get_status_code(client);
         ESP_LOGI(TAG, "Report OK, status=%d", status);
     } else {
         ESP_LOGE(TAG, "Report failed after %d retries, err=%d", retry, err);
-        // TCP 可能卡死了，强制重解析 mDNS 并重建 URL（下次发请求就会用新的 TCP 连接）
-        ESP_LOGI(TAG, "Re-resolving P4 address after repeated failures...");
-        resolve_p4_url();
     }
 
     esp_http_client_cleanup(client);
     cJSON_free(json);
+    return ok;
 }
 
 static void sensor_task(void *arg)
@@ -201,6 +200,7 @@ static void sensor_task(void *arg)
     vTaskDelay(pdMS_TO_TICKS(3000));
 
     int report_count = 0;
+    int fail_count = 0;
     while (1) {
         float temp = (dht22_valid && dht22_temperature > -10 && dht22_temperature < 60) ? dht22_temperature : -1;
         float humid = (dht22_valid && dht22_temperature > -10 && dht22_temperature < 60) ? dht22_humidity : -1;
@@ -210,7 +210,22 @@ static void sensor_task(void *arg)
                  temp, humid, lux);
 
         if (dht22_valid || bh1750_valid) {
-            send_sensor_data(temp, humid, lux);
+            if (send_sensor_data(temp, humid, lux)) {
+                fail_count = 0;  // 成功重置失败计数
+            } else {
+                fail_count++;
+                ESP_LOGW(TAG, "Report failed %d consecutive times", fail_count);
+                // 连续失败 10 次（~50s） → 断开重连 WiFi，强制重置 LWIP TCP 栈
+                if (fail_count >= 10) {
+                    ESP_LOGE(TAG, "Too many failures — restarting WiFi to recover TCP stack");
+                    esp_wifi_disconnect();
+                    vTaskDelay(pdMS_TO_TICKS(2000));
+                    esp_wifi_connect();
+                    vTaskDelay(pdMS_TO_TICKS(5000));
+                    resolve_p4_url();
+                    fail_count = 0;
+                }
+            }
         } else {
             ESP_LOGW(TAG, "No valid sensor data yet");
         }

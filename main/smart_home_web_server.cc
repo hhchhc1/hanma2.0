@@ -8,6 +8,7 @@
 #include "device_state.h"
 
 #include <cstring>
+#include <ctime>
 #include <mutex>
 #include <esp_log.h>
 #include <esp_wifi.h>
@@ -457,6 +458,15 @@ static esp_err_t weather_handler(httpd_req_t *req)
     const char *data = get_weather_data();
     httpd_resp_set_type(req, "text/plain; charset=UTF-8");
     httpd_resp_sendstr(req, data);
+    return ESP_OK;
+}
+
+static esp_err_t time_handler(httpd_req_t *req)
+{
+    char buf[32];
+    snprintf(buf, sizeof(buf), "{\"ts\": %lld}", (long long)time(NULL));
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, buf);
     return ESP_OK;
 }
 
@@ -943,6 +953,9 @@ static void start_web_server(void)
 
     httpd_uri_t uri_weather = {.uri = "/api/weather", .method = HTTP_GET, .handler = weather_handler, .user_ctx = NULL};
     httpd_register_uri_handler(s_server, &uri_weather);
+
+    httpd_uri_t uri_time = {.uri = "/api/time", .method = HTTP_GET, .handler = time_handler, .user_ctx = NULL};
+    httpd_register_uri_handler(s_server, &uri_time);
 
     httpd_uri_t uri_status = {.uri = "/api/status", .method = HTTP_GET, .handler = status_handler, .user_ctx = NULL};
     httpd_register_uri_handler(s_server, &uri_status);

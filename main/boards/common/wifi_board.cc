@@ -174,8 +174,11 @@ std::string WifiBoard::GetBoardJson() {
 }
 
 void WifiBoard::SetPowerSaveMode(bool enabled) {
+    // ESP-Hosted (P4+C6 SDIO) 架构下 WiFi 节电无意义：C6 独立运行，
+    // 节电模式反而导致 C3 等外部设备的 TCP 连接被 RST 中断。
+    // 始终关闭 WiFi 节电。
     auto& wifi_station = WifiStation::GetInstance();
-    wifi_station.SetPowerSaveMode(enabled);
+    wifi_station.SetPowerSaveMode(false);
 }
 
 void WifiBoard::ResetWifiConfiguration() {
